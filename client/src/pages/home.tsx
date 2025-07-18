@@ -2,9 +2,9 @@ import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { 
-  Shield, Github, Download, Search, Upload, Calendar, 
-  Code, Star, Info, Terminal, List, Database 
+import {
+  Shield, Github, Download, Search, Upload, Calendar,
+  Code, Star, Info, Terminal, List, Database
 } from "lucide-react";
 import CertificateTester from "@/components/certificate-tester";
 import BatchScanner from "@/components/batch-scanner";
@@ -35,12 +35,15 @@ export default function Home() {
               <span className="bg-blue-500/20 text-blue-300 px-2 py-1 rounded text-sm font-mono hidden sm:inline">NSE Script</span>
             </div>
             <div className="flex items-center space-x-2">
-              <Button variant="ghost" size="sm" className="text-slate-300 hover:text-slate-50 hidden sm:flex">
+              <Button variant="ghost" size="sm" className="text-slate-300 hover:text-slate-50 hidden sm:flex" as="a"
+                href="https://github.com/Jubilio"
+                target="_blank"
+                rel="noopener noreferrer">
                 <Github className="text-lg" />
               </Button>
-              <Button 
-                variant="ghost" 
-                size="sm" 
+              <Button
+                variant="ghost"
+                size="sm"
                 className="text-slate-300 hover:text-slate-50"
                 onClick={handleDownloadScript}
               >
@@ -179,7 +182,7 @@ export default function Home() {
 
                 <TabsContent value="script" className="space-y-6">
                   <NSEScript />
-                  
+
                   {/* Certificate Status Examples */}
                   <Card className="bg-slate-800/50 border-slate-700">
                     <CardContent className="p-6">
@@ -187,23 +190,23 @@ export default function Home() {
                         <List className="text-purple-400 mr-2" />
                         Example Output Status
                       </h3>
-                      
+
                       <div className="space-y-3">
                         <div className="flex items-center space-x-3 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded">
                           <span className="text-emerald-400 text-lg">✅</span>
                           <span className="text-emerald-300">Certificado válido por 245 dias.</span>
                         </div>
-                        
+
                         <div className="flex items-center space-x-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded">
                           <span className="text-amber-400 text-lg">⚠️</span>
                           <span className="text-amber-300">Certificado válido por apenas 14 dias.</span>
                         </div>
-                        
+
                         <div className="flex items-center space-x-3 p-3 bg-red-500/10 border border-red-500/30 rounded">
                           <span className="text-red-400 text-lg">❌</span>
                           <span className="text-red-300">Certificado expirado há 5 dias!</span>
                         </div>
-                        
+
                         <div className="flex items-center space-x-3 p-3 bg-slate-600/20 border border-slate-600 rounded">
                           <span className="text-slate-400 text-lg">❓</span>
                           <span className="text-slate-400">Certificado não encontrado ou inválido.</span>
@@ -224,7 +227,7 @@ export default function Home() {
               {activeSection === "script" && (
                 <div className="space-y-6">
                   <NSEScript />
-                  
+
                   {/* Certificate Status Examples */}
                   <Card className="bg-slate-800/50 border-slate-700">
                     <CardContent className="p-6">
@@ -232,23 +235,23 @@ export default function Home() {
                         <List className="text-purple-400 mr-2" />
                         Example Output Status
                       </h3>
-                      
+
                       <div className="space-y-3">
                         <div className="flex items-center space-x-3 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded">
                           <span className="text-emerald-400 text-lg">✅</span>
                           <span className="text-emerald-300">Certificado válido por 245 dias.</span>
                         </div>
-                        
+
                         <div className="flex items-center space-x-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded">
                           <span className="text-amber-400 text-lg">⚠️</span>
                           <span className="text-amber-300">Certificado válido por apenas 14 dias.</span>
                         </div>
-                        
+
                         <div className="flex items-center space-x-3 p-3 bg-red-500/10 border border-red-500/30 rounded">
                           <span className="text-red-400 text-lg">❌</span>
                           <span className="text-red-300">Certificado expirado há 5 dias!</span>
                         </div>
-                        
+
                         <div className="flex items-center space-x-3 p-3 bg-slate-600/20 border border-slate-600 rounded">
                           <span className="text-slate-400 text-lg">❓</span>
                           <span className="text-slate-400">Certificado não encontrado ou inválido.</span>
@@ -272,7 +275,10 @@ export default function Home() {
               <p className="mt-1">Part of the Nmap Security Scanner project</p>
             </div>
             <div className="flex items-center space-x-4 text-slate-400">
-              <Button variant="ghost" size="sm" className="hover:text-slate-200">
+              <Button variant="ghost" size="sm" className="hover:text-slate-200" as="a"
+                href="https://github.com/Jubilio"
+                target="_blank"
+                rel="noopener noreferrer">
                 <Github />
               </Button>
               <Button variant="ghost" size="sm" className="hover:text-slate-200">
