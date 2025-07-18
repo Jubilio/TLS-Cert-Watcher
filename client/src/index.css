@@ -1,0 +1,178 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: hsl(0, 0%, 100%);
+  --foreground: hsl(222, 84%, 4.9%);
+  --muted: hsl(210, 40%, 96%);
+  --muted-foreground: hsl(215, 16%, 46.9%);
+  --popover: hsl(0, 0%, 100%);
+  --popover-foreground: hsl(222, 84%, 4.9%);
+  --card: hsl(0, 0%, 100%);
+  --card-foreground: hsl(222, 84%, 4.9%);
+  --border: hsl(214, 32%, 91%);
+  --input: hsl(214, 32%, 91%);
+  --primary: hsl(207, 90%, 54%);
+  --primary-foreground: hsl(210, 40%, 98%);
+  --secondary: hsl(210, 40%, 96%);
+  --secondary-foreground: hsl(222, 47%, 11%);
+  --accent: hsl(210, 40%, 96%);
+  --accent-foreground: hsl(222, 47%, 11%);
+  --destructive: hsl(0, 84%, 60%);
+  --destructive-foreground: hsl(210, 40%, 98%);
+  --ring: hsl(222, 84%, 4.9%);
+  --radius: 0.5rem;
+  
+  /* Dark theme colors for slate background */
+  --slate-50: hsl(210, 40%, 98%);
+  --slate-100: hsl(210, 40%, 96%);
+  --slate-200: hsl(214, 32%, 91%);
+  --slate-300: hsl(213, 27%, 84%);
+  --slate-400: hsl(215, 20%, 65%);
+  --slate-500: hsl(215, 16%, 47%);
+  --slate-600: hsl(215, 19%, 35%);
+  --slate-700: hsl(215, 25%, 27%);
+  --slate-800: hsl(217, 33%, 17%);
+  --slate-900: hsl(222, 47%, 11%);
+}
+
+.dark {
+  --background: hsl(222, 47%, 11%);
+  --foreground: hsl(210, 40%, 98%);
+  --muted: hsl(217, 33%, 17%);
+  --muted-foreground: hsl(215, 20%, 65%);
+  --popover: hsl(222, 47%, 11%);
+  --popover-foreground: hsl(210, 40%, 98%);
+  --card: hsl(222, 47%, 11%);
+  --card-foreground: hsl(210, 40%, 98%);
+  --border: hsl(217, 33%, 17%);
+  --input: hsl(217, 33%, 17%);
+  --primary: hsl(207, 90%, 54%);
+  --primary-foreground: hsl(210, 40%, 98%);
+  --secondary: hsl(217, 33%, 17%);
+  --secondary-foreground: hsl(210, 40%, 98%);
+  --accent: hsl(217, 33%, 17%);
+  --accent-foreground: hsl(210, 40%, 98%);
+  --destructive: hsl(0, 62%, 30%);
+  --destructive-foreground: hsl(210, 40%, 98%);
+  --ring: hsl(212, 72%, 59%);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply font-sans antialiased bg-background text-foreground;
+  }
+}
+
+/* Custom animations for certificate scanning */
+@keyframes scan {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.animate-scan {
+  animation: scan 2s ease-in-out infinite;
+}
+
+/* Syntax highlighting improvements */
+.syntax-highlighter {
+  @apply font-mono text-sm;
+}
+
+.syntax-highlighter .keyword {
+  @apply text-purple-400;
+}
+
+.syntax-highlighter .string {
+  @apply text-amber-300;
+}
+
+.syntax-highlighter .number {
+  @apply text-red-300;
+}
+
+.syntax-highlighter .comment {
+  @apply text-slate-500;
+}
+
+.syntax-highlighter .function {
+  @apply text-emerald-300;
+}
+
+.syntax-highlighter .builtin {
+  @apply text-blue-300;
+}
+
+/* Certificate status indicators */
+.cert-status-valid {
+  @apply bg-emerald-500/10 border-emerald-500/30 text-emerald-300;
+}
+
+.cert-status-warning {
+  @apply bg-amber-500/10 border-amber-500/30 text-amber-300;
+}
+
+.cert-status-expired {
+  @apply bg-red-500/10 border-red-500/30 text-red-300;
+}
+
+.cert-status-error {
+  @apply bg-slate-600/20 border-slate-600 text-slate-400;
+}
+
+/* Terminal-like styling for scan results */
+.terminal-output {
+  @apply font-mono text-sm bg-slate-900 border border-slate-600 rounded p-4;
+}
+
+.terminal-output .success {
+  @apply text-emerald-300;
+}
+
+.terminal-output .warning {
+  @apply text-amber-300;
+}
+
+.terminal-output .error {
+  @apply text-red-300;
+}
+
+.terminal-output .info {
+  @apply text-blue-300;
+}
+
+.terminal-output .muted {
+  @apply text-slate-400;
+}
+
+/* Loading states */
+.loading-spinner {
+  @apply animate-spin rounded-full border-2 border-slate-600 border-t-blue-400;
+}
+
+/* Code block styling */
+.code-block {
+  @apply bg-slate-900 border border-slate-600 rounded-lg p-4 overflow-x-auto;
+}
+
+.code-block pre {
+  @apply m-0 font-mono text-sm;
+}
+
+/* Button hover effects for dark theme */
+.btn-primary {
+  @apply bg-blue-500 hover:bg-blue-600 text-white transition-colors;
+}
+
+.btn-secondary {
+  @apply bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-slate-50 transition-colors;
+}
+
+.btn-ghost {
+  @apply bg-transparent hover:bg-slate-700 text-slate-400 hover:text-slate-50 transition-colors;
+}
