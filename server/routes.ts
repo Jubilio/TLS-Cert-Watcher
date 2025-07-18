@@ -1,10 +1,15 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCertificateCheckSchema } from "@shared/schema";
+import { 
+  insertCertificateCheckSchema,
+  batchScanRequestSchema,
+  scheduleScanRequestSchema
+} from "@shared/schema";
 import { z } from "zod";
 import * as https from "https";
 import * as tls from "tls";
+import { randomUUID } from "crypto";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   
@@ -52,6 +57,172 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         res.status(500).json({ error: "Failed to perform certificate check" });
       }
+    }
+  });
+
+  // Batch scan endpoints
+  app.post("/api/batch-scans", async (req, res) => {
+    try {
+      const { name, hosts } = batchScanRequestSchema.parse(req.body);
+      const batchId = randomUUID();
+
+      // Create batch scan record
+      const batch = await storage.createBatchScan({
+        id: batchId,
+        name,
+        status: 'pending',
+        totalHosts: hosts.length,
+        completedHosts: 0,
+        failedHosts: 0
+      });
+
+      // Start batch processing asynchronously
+      processBatchScan(batchId, hosts);
+
+      res.json(batch);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ error: "Invalid request data", details: error.errors });
+      } else {
+        res.status(500).json({ error: "Failed to start batch scan" });
+      }
+    }
+  });
+
+  app.get("/api/batch-scans", async (req, res) => {
+    try {
+      const batches = await storage.getBatchScans();
+      res.json(batches);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch batch scans" });
+    }
+  });
+
+  app.get("/api/batch-scans/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const batch = await storage.getBatchScan(id);
+      if (!batch) {
+        return res.status(404).json({ error: "Batch scan not found" });
+      }
+      
+      const results = await storage.getCertificateChecksByBatchId(id);
+      res.json({ ...batch, detailedResults: results });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch batch scan" });
+    }
+  });
+
+  // Scheduled scan endpoints
+  app.post("/api/scheduled-scans", async (req, res) => {
+    try {
+      const scanData = scheduleScanRequestSchema.parse(req.body);
+      
+      // Calculate next scan time
+      const nextScan = calculateNextScanTime(scanData.scheduleType);
+      
+      const scheduledScan = await storage.createScheduledScan({
+        ...scanData,
+        nextScan
+      });
+
+      res.json(scheduledScan);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ error: "Invalid request data", details: error.errors });
+      } else {
+        res.status(500).json({ error: "Failed to create scheduled scan" });
+      }
+    }
+  });
+
+  app.get("/api/scheduled-scans", async (req, res) => {
+    try {
+      const scans = await storage.getScheduledScans();
+      res.json(scans);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch scheduled scans" });
+    }
+  });
+
+  app.put("/api/scheduled-scans/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const updates = req.body;
+      
+      const updatedScan = await storage.updateScheduledScan(id, updates);
+      if (!updatedScan) {
+        return res.status(404).json({ error: "Scheduled scan not found" });
+      }
+      
+      res.json(updatedScan);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update scheduled scan" });
+    }
+  });
+
+  app.delete("/api/scheduled-scans/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const deleted = await storage.deleteScheduledScan(id);
+      
+      if (!deleted) {
+        return res.status(404).json({ error: "Scheduled scan not found" });
+      }
+      
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete scheduled scan" });
+    }
+  });
+
+  // Export endpoints
+  app.get("/api/export/csv", async (req, res) => {
+    try {
+      const checks = await storage.getCertificateChecks();
+      const csv = generateCSV(checks);
+      
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename="certificate-checks.csv"');
+      res.send(csv);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to export CSV" });
+    }
+  });
+
+  app.get("/api/export/json", async (req, res) => {
+    try {
+      const checks = await storage.getCertificateChecks();
+      
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', 'attachment; filename="certificate-checks.json"');
+      res.json(checks);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to export JSON" });
+    }
+  });
+
+  // API for external access
+  app.get("/api/v1/check/:hostname", async (req, res) => {
+    try {
+      const { hostname } = req.params;
+      const port = req.query.port ? parseInt(req.query.port as string) : 443;
+      
+      // Perform certificate check
+      const checkResult = await performCertificateCheck(hostname, port);
+      
+      res.json({
+        hostname,
+        port,
+        status: checkResult.status,
+        daysUntilExpiration: checkResult.daysUntilExpiration,
+        validUntil: checkResult.validUntil,
+        issuer: checkResult.issuer,
+        subject: checkResult.subject,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to check certificate" });
     }
   });
 
@@ -165,7 +336,7 @@ async function performCertificateCheck(hostname: string, port: number) {
     };
 
     const req = https.request(options, (res) => {
-      const cert = res.socket.getPeerCertificate();
+      const cert = (res.socket as any).getPeerCertificate();
       
       if (!cert || Object.keys(cert).length === 0) {
         resolve({
@@ -241,4 +412,104 @@ async function performCertificateCheck(hostname: string, port: number) {
 
     req.end();
   });
+}
+
+// Helper functions
+async function processBatchScan(batchId: string, hosts: Array<{hostname: string, port: number}>) {
+  await storage.updateBatchScan(batchId, { status: 'running' });
+  
+  let completed = 0;
+  let failed = 0;
+  
+  const results = [];
+  
+  for (const host of hosts) {
+    try {
+      const result = await performCertificateCheck(host.hostname, host.port);
+      
+      // Store individual check result
+      await storage.createCertificateCheck({
+        ...result,
+        batchId
+      });
+      
+      results.push(result);
+      completed++;
+    } catch (error) {
+      failed++;
+      results.push({
+        hostname: host.hostname,
+        port: host.port,
+        status: 'error',
+        errorMessage: 'Failed to scan host',
+        daysUntilExpiration: null,
+        issuer: null,
+        subject: null,
+        validFrom: null,
+        validUntil: null
+      });
+    }
+    
+    // Update progress
+    await storage.updateBatchScan(batchId, {
+      completedHosts: completed,
+      failedHosts: failed
+    });
+  }
+  
+  // Mark as completed
+  await storage.updateBatchScan(batchId, {
+    status: 'completed',
+    completedAt: new Date(),
+    results: results
+  });
+}
+
+function calculateNextScanTime(scheduleType: string): Date {
+  const now = new Date();
+  const next = new Date(now);
+  
+  switch (scheduleType) {
+    case 'daily':
+      next.setDate(next.getDate() + 1);
+      break;
+    case 'weekly':
+      next.setDate(next.getDate() + 7);
+      break;
+    case 'monthly':
+      next.setMonth(next.getMonth() + 1);
+      break;
+    default:
+      next.setDate(next.getDate() + 1);
+  }
+  
+  return next;
+}
+
+function generateCSV(checks: any[]): string {
+  const headers = [
+    'hostname', 'port', 'status', 'daysUntilExpiration', 
+    'issuer', 'subject', 'validFrom', 'validUntil', 
+    'errorMessage', 'scanTimestamp'
+  ];
+  
+  const rows = checks.map(check => [
+    check.hostname,
+    check.port,
+    check.status,
+    check.daysUntilExpiration || '',
+    check.issuer || '',
+    check.subject || '',
+    check.validFrom || '',
+    check.validUntil || '',
+    check.errorMessage || '',
+    check.scanTimestamp || ''
+  ]);
+  
+  const csvContent = [
+    headers.join(','),
+    ...rows.map(row => row.map(field => `"${String(field).replace(/"/g, '""')}"`).join(','))
+  ].join('\n');
+  
+  return csvContent;
 }
