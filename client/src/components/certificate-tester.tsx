@@ -189,6 +189,12 @@ export default function CertificateTester() {
                   <span>Last scan: {new Date(latestCheck.scanTimestamp!).toLocaleString()}</span>
                 </div>
               )}
+              <Button variant="ghost" size="sm" onClick={async () => {
+                await apiRequest("DELETE", "/api/certificate-checks");
+                queryClient.invalidateQueries({ queryKey: ["/api/certificate-checks"] });
+              }}>
+                Clear
+              </Button>
             </div>
 
             {checkCertificateMutation.isPending && (

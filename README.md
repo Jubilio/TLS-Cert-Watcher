@@ -33,7 +33,7 @@ O **TLS Cert Watcher** é uma aplicação full‑stack projetada para detectar, 
 
 ## 📸 Demonstração
 
-![Demonstração da UI](/path/to/demo-screenshot.png)
+![Demonstração da UI](img/demo.png)
 
 ---
 
@@ -44,26 +44,45 @@ O **TLS Cert Watcher** é uma aplicação full‑stack projetada para detectar, 
 * **Node.js** ≥ v16
 * **Nmap** instalado (`sudo apt install nmap`)
 
-### Clone e instalação
+### Clone, build e execução
 
 ```bash
+# clone
 git clone https://github.com/Jubilio/TLS-Cert-Watcher.git
 cd TLS-Cert-Watcher
+
+# dependências
 npm install
+
+# build (gera frontend + bundle do servidor)
 npm run build
-npm start
+
+# execute em produção
+npm start   # servidor ouvirá em http://localhost:3000
+
+# ambiente de desenvolvimento hot-reload
+npm run dev # porta 5000 por padrão
 ```
 
 ### Acessando a aplicação
 
-Abra o navegador em `http://localhost:3000`, insira o `hostname:porta` (ex: `example.com:443`) e aguarde o resultado.
+Abra o navegador em `http://localhost:3000` (ou `http://localhost:5000` no modo dev) e use a aba **Scanner** para checar um host. A UI consome os endpoints acima automaticamente.
 
-### Uso via linha de comando
+### Endpoints principais da API
+
+| Método | Rota | Descrição |
+| ------ | ---- | --------- |
+| GET | `/check-cert?target=HOST&port=443` | Pré-validação (DNS → Ping → HTTPS) + scan NSE |
+| GET | `/api/v1/check/:hostname?port=443&engine=nmap` | JSON resumido (`engine=js` usa TLS nativo Node) |
+| GET | `/api/download-script` | Baixa o script `tls-expired-cert-checker.nse` |
+
+### Execução manual do script NSE
 
 Você também pode executar o script NSE manualmente:
 
 ```bash
-nmap -p443 --script ./scripts/tls-expired-cert-checker.nse example.com
+# dentro do repositório
+nmap -p 443 --script ./public/tls-expired-cert-checker.nse example.com
 ```
 
 ---

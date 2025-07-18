@@ -14,7 +14,8 @@ author = "Jubilio Mausse"
 license = "Same as Nmap"
 categories = {"safe", "default", "discovery"}
 
-portrule = shortport.port_or_service(443, "https")
+-- Match any TLS/SSL-enabled port (detected via service probe or TLS handshake)
+portrule = shortport.ssl
 
 local function days_between(date1, date2)
   local diff = os.difftime(date2, date1)
@@ -22,19 +23,26 @@ local function days_between(date1, date2)
 end
 
 local function parse_cert_date(date_str)
-  -- Parse certificate date string to timestamp
-  local pattern = "(%d+)-(%d+)-(%d+) (%d+):(%d+):(%d+)"
-  local year, month, day, hour, min, sec = date_str:match(pattern)
-  if year then
-    return os.time({
-      year = tonumber(year),
-      month = tonumber(month),
-      day = tonumber(day),
-      hour = tonumber(hour),
-      min = tonumber(min),
-      sec = tonumber(sec)
-    })
+  -- Tenta ISO-8601: "YYYY-MM-DDTHH:MM:SS" ou "YYYY-MM-DD HH:MM:SS"
+  local y, mo, d, h, mi, s = date_str:match("^(%d+)%-(%d+)%-(%d+)[T ](%d+):(%d+):(%d+)")
+  if y then
+    return os.time{year = tonumber(y), month = tonumber(mo), day = tonumber(d), hour = tonumber(h), min = tonumber(mi), sec = tonumber(s)}
   end
+
+  -- Formato OpenSSL: "Jan  2 15:04:05 2026 GMT"
+  local month_str, day, hour, min, sec, year = date_str:match("^(%a%a%a)%s+(%d+)%s+(%d+):(%d+):(%d+)%s+(%d+)")
+  if month_str then
+    local months = {Jan=1,Feb=2,Mar=3,Apr=4,May=5,Jun=6,Jul=7,Aug=8,Sep=9,Oct=10,Nov=11,Dec=12}
+    local month = months[month_str]
+    return os.time{year = tonumber(year), month = month, day = tonumber(day), hour = tonumber(hour), min = tonumber(min), sec = tonumber(sec)}
+  end
+
+  -- Formato legado: "YYYY-MM-DD"
+  y, mo, d = date_str:match("^(%d+)%-(%d+)%-(%d+)$")
+  if y then
+    return os.time{year = tonumber(y), month = tonumber(mo), day = tonumber(d), hour = 0, min = 0, sec = 0}
+  end
+
   return nil
 end
 

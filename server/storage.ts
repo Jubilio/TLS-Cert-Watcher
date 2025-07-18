@@ -23,6 +23,7 @@ export interface IStorage {
   getCertificateChecks(): Promise<CertificateCheck[]>;
   getCertificateChecksByHostname(hostname: string): Promise<CertificateCheck[]>;
   getCertificateChecksByBatchId(batchId: string): Promise<CertificateCheck[]>;
+  clearCertificateChecks(): Promise<void>;
   
   // Scheduled scan methods
   createScheduledScan(scan: InsertScheduledScan): Promise<ScheduledScan>;
@@ -109,6 +110,10 @@ export class MemStorage implements IStorage {
     return Array.from(this.certificateChecks.values())
       .filter(check => check.batchId === batchId)
       .sort((a, b) => (b.scanTimestamp?.getTime() || 0) - (a.scanTimestamp?.getTime() || 0));
+  }
+
+  async clearCertificateChecks(): Promise<void> {
+    this.certificateChecks.clear();
   }
 
   // Scheduled scan methods

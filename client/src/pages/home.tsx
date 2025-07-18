@@ -35,11 +35,10 @@ export default function Home() {
               <span className="bg-blue-500/20 text-blue-300 px-2 py-1 rounded text-sm font-mono hidden sm:inline">NSE Script</span>
             </div>
             <div className="flex items-center space-x-2">
-              <Button variant="ghost" size="sm" className="text-slate-300 hover:text-slate-50 hidden sm:flex" as="a"
-                href="https://github.com/Jubilio"
-                target="_blank"
-                rel="noopener noreferrer">
-                <Github className="text-lg" />
+              <Button variant="ghost" size="sm" className="text-slate-300 hover:text-slate-50 hidden sm:flex" asChild>
+                <a href="https://github.com/Jubilio" target="_blank" rel="noopener noreferrer">
+                  <Github className="text-lg" />
+                </a>
               </Button>
               <Button
                 variant="ghost"
@@ -275,11 +274,10 @@ export default function Home() {
               <p className="mt-1">Part of the Nmap Security Scanner project</p>
             </div>
             <div className="flex items-center space-x-4 text-slate-400">
-              <Button variant="ghost" size="sm" className="hover:text-slate-200" as="a"
-                href="https://github.com/Jubilio"
-                target="_blank"
-                rel="noopener noreferrer">
-                <Github />
+              <Button variant="ghost" size="sm" className="hover:text-slate-200" asChild>
+                <a href="https://github.com/Jubilio" target="_blank" rel="noopener noreferrer">
+                  <Github />
+                </a>
               </Button>
               <Button variant="ghost" size="sm" className="hover:text-slate-200">
                 <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">

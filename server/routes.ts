@@ -10,9 +10,26 @@ import { z } from "zod";
 import * as https from "https";
 import * as tls from "tls";
 import { randomUUID } from "crypto";
+import { exec as execCb } from "node:child_process";
+import dns from "node:dns/promises";
+import ping from "ping";
+import { promisify } from "node:util";
+import path from "node:path";
+
+const exec = promisify(execCb);
 
 export async function registerRoutes(app: Express): Promise<Server> {
   
+  // Clear certificate checks
+  app.delete("/api/certificate-checks", async (req, res) => {
+    try {
+      await storage.clearCertificateChecks();
+      res.status(204).send();
+    } catch (err) {
+      res.status(500).json({ error: "Failed to clear certificate checks" });
+    }
+  });
+
   // Get all certificate checks
   app.get("/api/certificate-checks", async (req, res) => {
     try {
@@ -202,23 +219,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Rota simples GET /check-cert?target=HOST[&port=443]
+  app.get("/check-cert", async (req, res) => {
+    const target = req.query.target as string | undefined;
+    if (!target) {
+      return res.status(400).send("Missing target");
+    }
+    const port = req.query.port ? parseInt(req.query.port as string) : 443;
+    try {
+      // pré-validação + script
+      const result = await performCertificateCheckNmap(target, port);
+      // também podemos fornecer output bruta se desejado
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).send(err.message || "Execution failed");
+    }
+  });
+
   // API for external access
   app.get("/api/v1/check/:hostname", async (req, res) => {
     try {
       const { hostname } = req.params;
       const port = req.query.port ? parseInt(req.query.port as string) : 443;
       
-      // Perform certificate check
-      const checkResult = await performCertificateCheck(hostname, port);
+      const engine = (req.query.engine as string) || "js";
+      let checkResult;
+      if (engine === "nmap") {
+        checkResult = await performCertificateCheckNmap(hostname, port);
+      } else {
+        checkResult = await performCertificateCheck(hostname, port);
+      }
       
       res.json({
         hostname,
         port,
-        status: checkResult.status,
-        daysUntilExpiration: checkResult.daysUntilExpiration,
-        validUntil: checkResult.validUntil,
-        issuer: checkResult.issuer,
-        subject: checkResult.subject,
+        ...checkResult,
         timestamp: new Date().toISOString()
       });
     } catch (error) {
@@ -412,6 +447,98 @@ async function performCertificateCheck(hostname: string, port: number) {
 
     req.end();
   });
+}
+
+async function performCertificateCheckNmap(hostname: string, port: number) {
+  const scriptPath = path.resolve(__dirname, "../public/tls-expired-cert-checker.nse");
+  await preScan(hostname, port);
+  try {
+    const { stdout } = await exec(`nmap -p ${port} --script "${scriptPath}" ${hostname} -oN -`, { maxBuffer: 10 * 1024 * 1024 });
+
+    let status: string = "unknown";
+    let daysUntilExpiration: number | null = null;
+    let issuer: string | null = null;
+    let subject: string | null = null;
+    let validUntil: string | null = null;
+
+    for (const raw of stdout.split("\n")) {
+      const line = raw.trim();
+      if (line.startsWith("✅")) status = "valid";
+      if (line.includes("ATENÇÃO") || line.startsWith("⚠️")) status = "warning";
+      if (line.includes("CRÍTICO") || line.startsWith("❌")) status = "expired";
+
+      const m = line.match(/(-?\d+) dias/);
+      if (m) daysUntilExpiration = parseInt(m[1], 10);
+
+      if (line.startsWith("Issuer:")) {
+        issuer = line.replace(/^Issuer:\s*/i, "").trim();
+      }
+      if (line.startsWith("Subject:")) {
+        subject = line.replace(/^Subject:\s*/i, "").trim();
+      }
+      if (line.startsWith("Válido até:")) {
+        validUntil = line.replace(/^Válido até:\s*/i, "").trim();
+      }
+    }
+
+    return { status, daysUntilExpiration, issuer, subject, validUntil };
+  } catch (error: any) {
+    return {
+      status: "error",
+      daysUntilExpiration: null,
+      issuer: null,
+      subject: null,
+      validUntil: null,
+      errorMessage: error.message,
+    };
+  }
+}
+
+// === Pré-validações =============================================
+async function dominioExiste(hostname: string): Promise<boolean> {
+  try {
+    const { address } = await dns.lookup(hostname);
+    console.log(`DNS OK: ${hostname} → ${address}`);
+    return true;
+  } catch (err: any) {
+    console.warn(`DNS falhou para ${hostname}:`, err.code || err.message);
+    return false;
+  }
+}
+
+async function estaNoAr(host: string): Promise<boolean> {
+  try {
+    const res = await ping.promise.probe(host, { timeout: 3 });
+    return res.alive;
+  } catch {
+    return false;
+  }
+}
+
+async function httpDisponivel(host: string, port = 443): Promise<boolean> {
+  try {
+    const url = `https://${host}:${port}`;
+    // Node 20+ tem fetch global, senão usar undici
+    const ctrl = new AbortController();
+    const id = setTimeout(() => ctrl.abort(), 5000);
+    const resp = await fetch(url, { method: "HEAD", signal: ctrl.signal });
+    clearTimeout(id);
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function preScan(hostname: string, port: number) {
+  if (!(await dominioExiste(hostname))) {
+    throw new Error("Domínio não existe ou não resolve");
+  }
+  if (!(await estaNoAr(hostname))) {
+    throw new Error("Host não responde a ping");
+  }
+  if (!(await httpDisponivel(hostname, port))) {
+    throw new Error(`Nenhuma resposta HTTPS em ${hostname}:${port}`);
+  }
 }
 
 // Helper functions
