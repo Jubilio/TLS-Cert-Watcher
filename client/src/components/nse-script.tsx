@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Code, Copy } from "lucide-react";
@@ -6,49 +7,25 @@ import SyntaxHighlighter from "@/components/syntax-highlighter";
 
 export default function NSEScript() {
   const { toast } = useToast();
-
-  const nseScript = `local sslcert = require "sslcert"
-local shortport = require "shortport"
-local stdnse = require "stdnse"
-local datetime = require "datetime"
-
-description = [[
-Verifica se certificados TLS estão expirados ou próximos da expiração.
-]]
-
-author = "Jubilio Mausse"
-license = "Same as Nmap"
-categories = {"safe", "default", "discovery"}
-
-portrule = shortport.port_or_service(443, "https")
-
-action = function(host, port)
-  local cert = sslcert.getCertificate(host, port)
-  if not cert or not cert.validity or not cert.validity["notAfter"] then
-    return "Certificado não encontrado ou inválido."
-  end
-
-  local expiration = cert.validity["notAfter"]
-  local now = datetime.new()
-  local days_left = (expiration - now):days()
-
-  if days_left < 0 then
-    return "❌ Certificado expirado há " .. math.abs(days_left) .. " dias!"
-  elseif days_left < 30 then
-    return "⚠️ Certificado válido por apenas " .. days_left .. " dias."
-  else
-    return "✅ Certificado válido por " .. days_left .. " dias."
-  end
-end`;
+  const { data: nseScript = "", isLoading, error } = useQuery<string>({
+    queryKey: ["nse-script-source"],
+    queryFn: async () => {
+      const response = await fetch("/api/download-script");
+      if (!response.ok) throw new Error("Failed to load the NSE script");
+      return response.text();
+    },
+    staleTime: Infinity,
+  });
 
   const handleCopy = async () => {
+    if (!nseScript) return;
     try {
       await navigator.clipboard.writeText(nseScript);
       toast({
         title: "Copied!",
         description: "NSE script copied to clipboard",
       });
-    } catch (err) {
+    } catch {
       toast({
         title: "Error",
         description: "Failed to copy script to clipboard",
@@ -65,20 +42,23 @@ end`;
             <Code className="text-green-400 mr-2" />
             NSE Script Source
           </h3>
-          <Button 
-            variant="ghost" 
+          <Button
+            variant="ghost"
             size="sm"
             onClick={handleCopy}
+            disabled={isLoading || !nseScript}
             className="text-slate-400 hover:text-slate-200 text-sm"
           >
             <Copy className="mr-1 h-4 w-4" />
             Copy
           </Button>
         </div>
-        
+
         <Card className="bg-slate-900 border-slate-600">
           <CardContent className="p-4 overflow-x-auto">
-            <SyntaxHighlighter code={nseScript} language="lua" />
+            {isLoading && <p className="text-slate-400">Loading script…</p>}
+            {error && <p className="text-red-300">The NSE script could not be loaded.</p>}
+            {nseScript && <SyntaxHighlighter code={nseScript} language="lua" />}
           </CardContent>
         </Card>
       </CardContent>

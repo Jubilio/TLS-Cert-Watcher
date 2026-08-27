@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
-import { Upload, FileText, Download, Eye, Trash2 } from "lucide-react";
+import { Upload, FileText, Download } from "lucide-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -15,7 +15,6 @@ import type { BatchScan } from "@shared/schema";
 export default function BatchScanner() {
   const [batchName, setBatchName] = useState("");
   const [hostsText, setHostsText] = useState("");
-  const [selectedBatch, setSelectedBatch] = useState<BatchScan | null>(null);
   const { toast } = useToast();
 
   const { data: batches, isLoading: isLoadingBatches } = useQuery<BatchScan[]>({
@@ -36,10 +35,10 @@ export default function BatchScanner() {
         description: "Your batch scan has been queued for processing",
       });
     },
-    onError: () => {
+    onError: (error) => {
       toast({
         title: "Error",
-        description: "Failed to start batch scan",
+        description: error instanceof Error ? error.message : "Failed to start batch scan",
         variant: "destructive",
       });
     },
@@ -143,7 +142,7 @@ export default function BatchScanner() {
               placeholder={`Enter one host per line:
 example.com
 api.example.com:8443
-192.168.1.100:443`}
+1.1.1.1:443`}
               className="bg-slate-700 border-slate-600 text-slate-50 h-32"
               disabled={startBatchScanMutation.isPending}
             />
@@ -209,16 +208,9 @@ api.example.com:8443
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => setSelectedBatch(batch)}
-                        className="text-slate-400 hover:text-slate-200"
-                      >
-                        <Eye className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
                         onClick={() => window.open(`/api/batch-scans/${batch.id}`, '_blank')}
                         className="text-slate-400 hover:text-slate-200"
+                        aria-label={`Open results for ${batch.name}`}
                       >
                         <Download className="w-4 h-4" />
                       </Button>

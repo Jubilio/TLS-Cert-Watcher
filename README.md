@@ -1,135 +1,106 @@
-[![GitHub Jubilio](https://img.shields.io/badge/github–Jubilio-181717?style=for-the-badge\&logo=github\&logoColor=white)](https://github.com/Jubilio)
+# TLS Cert Watcher
 
-# TLS Cert Watcher 🛡️
+[![CI](https://github.com/Jubilio/TLS-Cert-Watcher/actions/workflows/ci.yml/badge.svg)](https://github.com/Jubilio/TLS-Cert-Watcher/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Verificador interativo de certificados TLS/SSL via Nmap NSE + interface web moderna**
+Aplicação web para verificar a validade de certificados TLS, individualmente ou em lote. O projeto combina uma interface React, uma API Express, verificações TLS nativas do Node.js e um motor opcional baseado em Nmap NSE.
 
----
+![Demonstração da interface](img/demo.png)
 
-## ⚡ Visão geral
+## Principais recursos
 
-O **TLS Cert Watcher** é uma aplicação full‑stack projetada para detectar, monitorar e alertar sobre a validade de certificados TLS/SSL em qualquer domínio ou IP. Combina a robustez do Nmap NSE com uma interface web responsiva, oferecendo:
+- Verificação direta de certificados em qualquer serviço TLS, sem depender de uma resposta HTTP.
+- Estados `valid`, `warning`, `expired` e `error`, com detalhes do emissor, titular e validade.
+- Varredura em lote de até 100 alvos e histórico em memória.
+- Exportação dos resultados em CSV protegido contra formula injection e em JSON.
+- API REST com limitação de pedidos por cliente.
+- Script NSE disponível para download e execução manual.
+- Imagem Docker executada como utilizador sem privilégios, com Nmap e health check incluídos.
 
-* Script NSE personalizado para extrair e validar datas de vencimento.
-* Interface web em tempo real com tema escuro e indicadores visuais (válido, aviso, expirado, erro).
-* Scanner interativo (hostname/porta) e varredura em lote.
-* Agendamento de scans e histórico de resultados.
-* Exportação de relatórios em CSV/JSON, integração via API REST e notificações por e‑mail/webhook.
-* Design responsivo, compatível com dispositivos móveis.
+> Os registos de scans agendados já podem ser criados e geridos na interface. A execução automática recorrente, persistência em base de dados e notificações ainda fazem parte do roadmap.
 
----
+## Requisitos
 
-## 🧩 Recursos principais
+- Node.js 20 ou posterior.
+- Nmap apenas para `engine=nmap`; o motor TLS nativo funciona sem Nmap.
+- Docker, opcionalmente, para uma execução isolada e reproduzível.
 
-* 🔍 **Scanner interativo**: insira domínio e porta para checagem imediata.
-* 📦 **Varredura em lote**: carregue listas de hosts para análise em massa.
-* 🗓️ **Monitoramento agendado**: configure scans recorrentes via cron.
-* 📂 **Exportação de relatórios**: baixe resultados em CSV ou JSON.
-* ⚙️ **API REST**: acesse programaticamente o status dos certificados.
-* 📡 **Notificações**: envie alertas por e‑mail ou webhook.
-* 📥 **Download do script NSE**: obtenha o script diretamente pela UI.
-
----
-
-## 📸 Demonstração
-
-![Demonstração da UI](img/demo.png)
-
----
-
-## 🚀 Instalação e uso local
-
-### Pré-requisitos
-
-* **Node.js** ≥ v16
-* **Nmap** instalado (`sudo apt install nmap`)
-
-### Clone, build e execução
+## Instalação local
 
 ```bash
-# clone
 git clone https://github.com/Jubilio/TLS-Cert-Watcher.git
 cd TLS-Cert-Watcher
-
-# dependências
-npm install
-
-# build (gera frontend + bundle do servidor)
-npm run build
-
-# execute em produção
-npm start   # servidor ouvirá em http://localhost:3000
-
-# ambiente de desenvolvimento hot-reload
-npm run dev # porta 5000 por padrão
+npm ci --legacy-peer-deps
+npm run dev
 ```
 
-### Acessando a aplicação
+A aplicação de desenvolvimento fica disponível em `http://localhost:3000`, salvo se `PORT` tiver outro valor.
 
-Abra o navegador em `http://localhost:3000` (ou `http://localhost:5000` no modo dev) e use a aba **Scanner** para checar um host. A UI consome os endpoints acima automaticamente.
-
-### Endpoints principais da API
-
-| Método | Rota | Descrição |
-| ------ | ---- | --------- |
-| GET | `/check-cert?target=HOST&port=443` | Pré-validação (DNS → Ping → HTTPS) + scan NSE |
-| GET | `/api/v1/check/:hostname?port=443&engine=nmap` | JSON resumido (`engine=js` usa TLS nativo Node) |
-| GET | `/api/download-script` | Baixa o script `tls-expired-cert-checker.nse` |
-
-### Execução manual do script NSE
-
-Você também pode executar o script NSE manualmente:
+Para validar e executar a versão de produção:
 
 ```bash
-# dentro do repositório
-nmap -p 443 --script ./public/tls-expired-cert-checker.nse example.com
+npm run ci
+npm start
 ```
 
----
+## Docker
 
-## 📦 Deploy contínuo
+```bash
+docker build -t tls-cert-watcher:1.1.0 .
+docker run --rm -p 3000:3000 tls-cert-watcher:1.1.0
+```
 
-Recomendamos hospedar em plataformas como **Render**, **Railway** ou **Vercel + Railway**:
+O endpoint `GET /api/health` pode ser usado por Docker, Kubernetes ou outro sistema de monitoria.
 
-1. Conecte o repositório ao serviço.
-2. Defina variáveis de ambiente:
+## API
 
-   * `SCHEDULE_CRON` – expressões cron para scans agendados.
-   * `WEBHOOK_URL` – endpoint para notificações.
-   * `EMAIL_SMTP`, `SMTP_USER`, `SMTP_PASS` – configuração de e‑mail.
-3. Configure pipelines de CI/CD (veja `.github/workflows/ci.yml`).
+| Método | Endpoint | Finalidade |
+| --- | --- | --- |
+| `POST` | `/api/certificate-checks` | Verifica e guarda um alvo `{ hostname, port }` |
+| `GET` | `/api/certificate-checks` | Lista o histórico da instância |
+| `DELETE` | `/api/certificate-checks` | Limpa o histórico da instância |
+| `POST` | `/api/batch-scans` | Inicia uma verificação em lote |
+| `GET` | `/api/batch-scans/:id` | Consulta progresso e resultados do lote |
+| `GET` | `/api/v1/check/:hostname` | Verificação sem guardar; aceita `port` e `engine=js|nmap` |
+| `GET` | `/api/export/csv` | Exporta o histórico em CSV |
+| `GET` | `/api/export/json` | Exporta o histórico em JSON |
+| `GET` | `/api/download-script` | Baixa o script NSE canónico |
+| `GET` | `/api/health` | Verifica a saúde do serviço |
 
----
+Exemplo:
 
-## 🤝 Contribuições
+```bash
+curl "http://localhost:3000/api/v1/check/example.com?port=443&engine=js"
+```
 
-Contribuições são bem-vindas! Siga o guia em [CONTRIBUTING.md](./CONTRIBUTING.md):
+## Configuração
 
-1. Faça um fork.
-2. Crie uma branch: `git checkout -b feature/nova-funcionalidade`.
-3. Faça commits claros e atenda aos padrões de lint e estilo.
-4. Abra um Pull Request explicando a mudança.
+Copie `.env.example` e defina as variáveis necessárias no ambiente de execução.
 
-Consulte `ROADMAP.md` para ideias de novas funcionalidades e prioridades.
+| Variável | Padrão | Descrição |
+| --- | --- | --- |
+| `PORT` | `3000` | Porta HTTP da aplicação |
+| `SCAN_RATE_LIMIT` | `30` | Máximo de pedidos de scan por IP e minuto |
+| `CORS_ORIGINS` | vazio | Origens web autorizadas, separadas por vírgulas |
+| `TRUST_PROXY` | `0` | Use `1` quando existir um proxy reverso confiável |
+| `ALLOW_PRIVATE_TARGETS` | `false` | Autoriza IPs privados e internos |
 
----
+### Modelo de segurança dos alvos
 
-## 📜 Licença
+Por padrão, a aplicação bloqueia endereços privados, loopback, link-local, metadata e intervalos reservados, reduzindo riscos de SSRF. Para monitorizar serviços internos, `ALLOW_PRIVATE_TARGETS=true` pode ser ativado apenas numa implantação privada e protegida por controlo de acesso. Nunca exponha publicamente uma instância com essa opção ativada.
 
-Este projeto está licenciado sob a **MIT License**. Veja [LICENSE](./LICENSE) para detalhes.
+O motor Nmap utiliza argumentos separados, sem execução por shell, e tem timeout de 30 segundos.
 
----
+## Script NSE manual
 
-## 📫 Contato
+```bash
+nmap -Pn -p 443 --script ./public/tls-expired-cert-checker.nse example.com
+```
 
-**Jubilio Mausse** – [GitHub](https://github.com/Jubilio) – [jubiliomausse5@gmail.com](mailto:jubiliomausse5@gmail.com)
+## Qualidade e contribuição
 
-Projeto: [TLS-Cert-Watcher](https://github.com/Jubilio/TLS-Cert-Watcher)
+O CI executa type-checking, testes, build da aplicação e build da imagem Docker. Consulte [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) e [CHANGELOG.md](CHANGELOG.md) antes de contribuir ou publicar uma versão.
 
----
+## Licença
 
-## 📚 Recursos adicionais
-
-* Boas práticas de README: [Awesome Readme](https://github.com/matiassingers/awesome-readme)
-* Guia de Open Source: [Codacy Blog](https://blog.codacy.com/best-practices-to-manage-an-open-source-project)
-* Templates de perfil GitHub: [Profile Readme Templates](https://github.com/durgeshsamariya/awesome-github-profile-readme-templates)
+Distribuído sob a [licença MIT](LICENSE).

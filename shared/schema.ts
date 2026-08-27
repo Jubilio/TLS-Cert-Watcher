@@ -2,6 +2,37 @@ import { pgTable, text, serial, integer, boolean, timestamp, json } from "drizzl
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+export const hostnameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(253)
+  .transform((value) => value.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase())
+  .refine((value) => /^[a-z0-9.:-]+$/.test(value), "Invalid hostname or IP address");
+
+export const portSchema = z.coerce.number().int().min(1).max(65_535);
+
+export const scanTargetSchema = z.object({
+  hostname: hostnameSchema,
+  port: portSchema.default(443),
+});
+
+const optionalEmailSchema = z.preprocess(
+  (value) => (value === "" || value === null ? undefined : value),
+  z.string().trim().email().max(254).optional(),
+);
+
+const optionalHttpsUrlSchema = z.preprocess(
+  (value) => (value === "" || value === null ? undefined : value),
+  z
+    .string()
+    .trim()
+    .url()
+    .max(2_048)
+    .refine((value) => new URL(value).protocol === "https:", "Webhook URL must use HTTPS")
+    .optional(),
+);
+
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   username: text("username").notNull().unique(),
@@ -71,20 +102,21 @@ export const insertBatchScanSchema = createInsertSchema(batchScans).omit({
 
 // API request schemas
 export const batchScanRequestSchema = z.object({
-  name: z.string().min(1),
-  hosts: z.array(z.object({
-    hostname: z.string().min(1),
-    port: z.number().optional().default(443)
-  })).min(1).max(100) // Limit to 100 hosts per batch
+  name: z.string().trim().min(1).max(100),
+  hosts: z.array(scanTargetSchema).min(1).max(100),
 });
 
-export const scheduleScanRequestSchema = z.object({
-  hostname: z.string().min(1),
-  port: z.number().optional().default(443),
-  scheduleType: z.enum(['daily', 'weekly', 'monthly']),
-  notifyEmail: z.string().email().optional(),
-  notifyWebhook: z.string().url().optional()
+export const scheduleScanRequestSchema = scanTargetSchema.extend({
+  scheduleType: z.enum(["daily", "weekly", "monthly"]),
+  notifyEmail: optionalEmailSchema,
+  notifyWebhook: optionalHttpsUrlSchema,
 });
+
+export const updateScheduledScanSchema = z
+  .object({
+    isActive: z.boolean(),
+  })
+  .strict();
 
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;

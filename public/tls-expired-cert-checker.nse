@@ -1,7 +1,5 @@
 local sslcert = require "sslcert"
 local shortport = require "shortport"
-local stdnse = require "stdnse"
-local datetime = require "datetime"
 
 description = [[
 Verifica se certificados TLS estão expirados ou próximos da expiração.
@@ -23,6 +21,24 @@ local function days_between(date1, date2)
 end
 
 local function parse_cert_date(date_str)
+  -- Recent Nmap versions expose certificate dates as Unix timestamps.
+  if type(date_str) == "number" then
+    return date_str
+  end
+
+  if type(date_str) == "table" then
+    if type(date_str.time) == "number" then
+      return date_str.time
+    end
+    if date_str.year and date_str.month and date_str.day then
+      return os.time(date_str)
+    end
+  end
+
+  if type(date_str) ~= "string" then
+    return nil
+  end
+
   -- Tenta ISO-8601: "YYYY-MM-DDTHH:MM:SS" ou "YYYY-MM-DD HH:MM:SS"
   local y, mo, d, h, mi, s = date_str:match("^(%d+)%-(%d+)%-(%d+)[T ](%d+):(%d+):(%d+)")
   if y then
@@ -75,7 +91,7 @@ action = function(host, port)
   if cert.issuer then
     table.insert(result, "  Issuer: " .. (cert.issuer.commonName or "N/A"))
   end
-  table.insert(result, "  Válido até: " .. cert.validity.notAfter)
+  table.insert(result, "  Válido até: " .. os.date("!%Y-%m-%dT%H:%M:%SZ", expiration_time))
   
   -- Status based on days left
   if days_left < 0 then
