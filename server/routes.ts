@@ -1,642 +1,339 @@
-import type { Express } from "express";
-import { createServer, type Server } from "http";
-import { storage } from "./storage";
-import { 
-  insertCertificateCheckSchema,
-  batchScanRequestSchema,
-  scheduleScanRequestSchema
-} from "@shared/schema";
+import type { Express, Response } from "express";
+import { createServer, type Server } from "node:http";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import * as https from "https";
-import * as tls from "tls";
-import { randomUUID } from "crypto";
-import { exec as execCb } from "node:child_process";
-import dns from "node:dns/promises";
-import ping from "ping";
-import { promisify } from "node:util";
-import path from "node:path";
+import packageMetadata from "../package.json" with { type: "json" };
+import type { CertificateCheck, InsertCertificateCheck } from "@shared/schema";
+import {
+  batchScanRequestSchema,
+  scanTargetSchema,
+  scheduleScanRequestSchema,
+  updateScheduledScanSchema,
+} from "@shared/schema";
+import { performCertificateCheck } from "./certificate-checker";
+import { getNseScriptPath, performCertificateCheckNmap } from "./nmap-checker";
+import { createRateLimiter } from "./rate-limit";
+import { storage } from "./storage";
+import { TargetValidationError } from "./target-validation";
 
-const exec = promisify(execCb);
+const scanRequestSchema = scanTargetSchema;
+const checkQuerySchema = z.object({
+  port: z.coerce.number().int().min(1).max(65_535).default(443),
+  engine: z.enum(["js", "nmap"]).default("js"),
+});
+const idSchema = z.coerce.number().int().positive();
+
+const configuredRateLimit = Number.parseInt(process.env.SCAN_RATE_LIMIT || "30", 10);
+const scanRateLimit = Number.isInteger(configuredRateLimit) && configuredRateLimit > 0
+  ? configuredRateLimit
+  : 30;
+const scanLimiter = createRateLimiter({ windowMs: 60_000, max: scanRateLimit });
+
+function handleRouteError(res: Response, error: unknown, fallback: string): void {
+  if (error instanceof z.ZodError) {
+    res.status(400).json({ error: "Invalid request data", details: error.errors });
+    return;
+  }
+
+  if (error instanceof TargetValidationError) {
+    res.status(error.statusCode).json({ error: error.message });
+    return;
+  }
+
+  console.error(fallback, error);
+  res.status(500).json({ error: fallback });
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  
-  // Clear certificate checks
-  app.delete("/api/certificate-checks", async (req, res) => {
+  app.get("/api/health", (_req, res) => {
+    res.json({
+      status: "ok",
+      version: packageMetadata.version,
+      uptimeSeconds: Math.floor(process.uptime()),
+    });
+  });
+
+  app.delete("/api/certificate-checks", async (_req, res) => {
     try {
       await storage.clearCertificateChecks();
       res.status(204).send();
-    } catch (err) {
-      res.status(500).json({ error: "Failed to clear certificate checks" });
-    }
-  });
-
-  // Get all certificate checks
-  app.get("/api/certificate-checks", async (req, res) => {
-    try {
-      const checks = await storage.getCertificateChecks();
-      res.json(checks);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch certificate checks" });
+      handleRouteError(res, error, "Failed to clear certificate checks");
     }
   });
 
-  // Get certificate checks for a specific hostname
+  app.get("/api/certificate-checks", async (_req, res) => {
+    try {
+      res.json(await storage.getCertificateChecks());
+    } catch (error) {
+      handleRouteError(res, error, "Failed to fetch certificate checks");
+    }
+  });
+
   app.get("/api/certificate-checks/:hostname", async (req, res) => {
     try {
-      const { hostname } = req.params;
-      const checks = await storage.getCertificateChecksByHostname(hostname);
-      res.json(checks);
+      const hostname = z.string().trim().min(1).max(253).parse(req.params.hostname);
+      res.json(await storage.getCertificateChecksByHostname(hostname));
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch certificate checks" });
+      handleRouteError(res, error, "Failed to fetch certificate checks");
     }
   });
 
-  // Perform certificate check
-  app.post("/api/certificate-checks", async (req, res) => {
+  app.post("/api/certificate-checks", scanLimiter, async (req, res) => {
     try {
-      const requestSchema = z.object({
-        hostname: z.string().min(1),
-        port: z.number().optional().default(443)
-      });
-
-      const { hostname, port } = requestSchema.parse(req.body);
-
-      // Perform actual certificate check
-      const checkResult = await performCertificateCheck(hostname, port);
-      
-      // Store the result
-      const savedCheck = await storage.createCertificateCheck(checkResult);
-      
-      res.json(savedCheck);
+      const { hostname, port } = scanRequestSchema.parse(req.body);
+      const result = await performCertificateCheck(hostname, port);
+      res.status(201).json(await storage.createCertificateCheck(result));
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        res.status(400).json({ error: "Invalid request data", details: error.errors });
-      } else {
-        res.status(500).json({ error: "Failed to perform certificate check" });
-      }
+      handleRouteError(res, error, "Failed to perform certificate check");
     }
   });
 
-  // Batch scan endpoints
-  app.post("/api/batch-scans", async (req, res) => {
+  app.post("/api/batch-scans", scanLimiter, async (req, res) => {
     try {
       const { name, hosts } = batchScanRequestSchema.parse(req.body);
-      const batchId = randomUUID();
-
-      // Create batch scan record
+      const id = randomUUID();
       const batch = await storage.createBatchScan({
-        id: batchId,
+        id,
         name,
-        status: 'pending',
+        status: "pending",
         totalHosts: hosts.length,
         completedHosts: 0,
-        failedHosts: 0
+        failedHosts: 0,
       });
 
-      // Start batch processing asynchronously
-      processBatchScan(batchId, hosts);
+      void processBatchScan(id, hosts).catch(async (error) => {
+        console.error("Batch scan failed", error);
+        await storage.updateBatchScan(id, { status: "failed", completedAt: new Date() });
+      });
 
-      res.json(batch);
+      res.status(202).json(batch);
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        res.status(400).json({ error: "Invalid request data", details: error.errors });
-      } else {
-        res.status(500).json({ error: "Failed to start batch scan" });
-      }
+      handleRouteError(res, error, "Failed to start batch scan");
     }
   });
 
-  app.get("/api/batch-scans", async (req, res) => {
+  app.get("/api/batch-scans", async (_req, res) => {
     try {
-      const batches = await storage.getBatchScans();
-      res.json(batches);
+      res.json(await storage.getBatchScans());
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch batch scans" });
+      handleRouteError(res, error, "Failed to fetch batch scans");
     }
   });
 
   app.get("/api/batch-scans/:id", async (req, res) => {
     try {
-      const { id } = req.params;
-      const batch = await storage.getBatchScan(id);
+      const batch = await storage.getBatchScan(req.params.id);
       if (!batch) {
-        return res.status(404).json({ error: "Batch scan not found" });
+        res.status(404).json({ error: "Batch scan not found" });
+        return;
       }
-      
-      const results = await storage.getCertificateChecksByBatchId(id);
-      res.json({ ...batch, detailedResults: results });
+
+      const detailedResults = await storage.getCertificateChecksByBatchId(req.params.id);
+      res.json({ ...batch, detailedResults });
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch batch scan" });
+      handleRouteError(res, error, "Failed to fetch batch scan");
     }
   });
 
-  // Scheduled scan endpoints
   app.post("/api/scheduled-scans", async (req, res) => {
     try {
-      const scanData = scheduleScanRequestSchema.parse(req.body);
-      
-      // Calculate next scan time
-      const nextScan = calculateNextScanTime(scanData.scheduleType);
-      
+      const scan = scheduleScanRequestSchema.parse(req.body);
       const scheduledScan = await storage.createScheduledScan({
-        ...scanData,
-        nextScan
+        ...scan,
+        nextScan: calculateNextScanTime(scan.scheduleType),
       });
-
-      res.json(scheduledScan);
+      res.status(201).json(scheduledScan);
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        res.status(400).json({ error: "Invalid request data", details: error.errors });
-      } else {
-        res.status(500).json({ error: "Failed to create scheduled scan" });
-      }
+      handleRouteError(res, error, "Failed to create scheduled scan");
     }
   });
 
-  app.get("/api/scheduled-scans", async (req, res) => {
+  app.get("/api/scheduled-scans", async (_req, res) => {
     try {
-      const scans = await storage.getScheduledScans();
-      res.json(scans);
+      res.json(await storage.getScheduledScans());
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch scheduled scans" });
+      handleRouteError(res, error, "Failed to fetch scheduled scans");
     }
   });
 
   app.put("/api/scheduled-scans/:id", async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
-      const updates = req.body;
-      
-      const updatedScan = await storage.updateScheduledScan(id, updates);
-      if (!updatedScan) {
-        return res.status(404).json({ error: "Scheduled scan not found" });
+      const id = idSchema.parse(req.params.id);
+      const updates = updateScheduledScanSchema.parse(req.body);
+      const updated = await storage.updateScheduledScan(id, updates);
+      if (!updated) {
+        res.status(404).json({ error: "Scheduled scan not found" });
+        return;
       }
-      
-      res.json(updatedScan);
+      res.json(updated);
     } catch (error) {
-      res.status(500).json({ error: "Failed to update scheduled scan" });
+      handleRouteError(res, error, "Failed to update scheduled scan");
     }
   });
 
   app.delete("/api/scheduled-scans/:id", async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
-      const deleted = await storage.deleteScheduledScan(id);
-      
-      if (!deleted) {
-        return res.status(404).json({ error: "Scheduled scan not found" });
-      }
-      
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to delete scheduled scan" });
-    }
-  });
-
-  // Export endpoints
-  app.get("/api/export/csv", async (req, res) => {
-    try {
-      const checks = await storage.getCertificateChecks();
-      const csv = generateCSV(checks);
-      
-      res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', 'attachment; filename="certificate-checks.csv"');
-      res.send(csv);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to export CSV" });
-    }
-  });
-
-  app.get("/api/export/json", async (req, res) => {
-    try {
-      const checks = await storage.getCertificateChecks();
-      
-      res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Content-Disposition', 'attachment; filename="certificate-checks.json"');
-      res.json(checks);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to export JSON" });
-    }
-  });
-
-  // Rota simples GET /check-cert?target=HOST[&port=443]
-  app.get("/check-cert", async (req, res) => {
-    const target = req.query.target as string | undefined;
-    if (!target) {
-      return res.status(400).send("Missing target");
-    }
-    const port = req.query.port ? parseInt(req.query.port as string) : 443;
-    try {
-      // pré-validação + script
-      const result = await performCertificateCheckNmap(target, port);
-      // também podemos fornecer output bruta se desejado
-      res.json(result);
-    } catch (err: any) {
-      res.status(500).send(err.message || "Execution failed");
-    }
-  });
-
-  // API for external access
-  app.get("/api/v1/check/:hostname", async (req, res) => {
-    try {
-      const { hostname } = req.params;
-      const port = req.query.port ? parseInt(req.query.port as string) : 443;
-      
-      const engine = (req.query.engine as string) || "js";
-      let checkResult;
-      if (engine === "nmap") {
-        checkResult = await performCertificateCheckNmap(hostname, port);
-      } else {
-        checkResult = await performCertificateCheck(hostname, port);
-      }
-      
-      res.json({
-        hostname,
-        port,
-        ...checkResult,
-        timestamp: new Date().toISOString()
-      });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to check certificate" });
-    }
-  });
-
-  // Download NSE script
-  app.get("/api/download-script", (req, res) => {
-    res.setHeader('Content-Type', 'text/plain');
-    res.setHeader('Content-Disposition', 'attachment; filename="tls-expired-cert-checker.nse"');
-    
-    const nseScript = `local sslcert = require "sslcert"
-local shortport = require "shortport"
-local stdnse = require "stdnse"
-local datetime = require "datetime"
-
-description = [[
-Verifica se certificados TLS estão expirados ou próximos da expiração.
-Este script conecta-se a serviços HTTPS e analisa a data de validade
-dos certificados TLS/SSL, alertando sobre certificados expirados ou
-que expirarão em menos de 30 dias.
-]]
-
-author = "Jubilio Mausse"
-license = "Same as Nmap"
-categories = {"safe", "default", "discovery"}
-
-portrule = shortport.port_or_service(443, "https")
-
-local function days_between(date1, date2)
-  local diff = os.difftime(date2, date1)
-  return math.floor(diff / (24 * 60 * 60))
-end
-
-local function parse_cert_date(date_str)
-  -- Parse certificate date string to timestamp
-  local pattern = "(%d+)-(%d+)-(%d+) (%d+):(%d+):(%d+)"
-  local year, month, day, hour, min, sec = date_str:match(pattern)
-  if year then
-    return os.time({
-      year = tonumber(year),
-      month = tonumber(month),
-      day = tonumber(day),
-      hour = tonumber(hour),
-      min = tonumber(min),
-      sec = tonumber(sec)
-    })
-  end
-  return nil
-end
-
-action = function(host, port)
-  local status, cert = sslcert.getCertificate(host, port)
-  
-  if not status then
-    return "❓ Não foi possível obter o certificado SSL/TLS"
-  end
-  
-  if not cert or not cert.validity or not cert.validity.notAfter then
-    return "❓ Certificado não encontrado ou dados de validade inválidos"
-  end
-
-  local expiration_time = parse_cert_date(cert.validity.notAfter)
-  local current_time = os.time()
-  
-  if not expiration_time then
-    return "❓ Não foi possível analisar a data de expiração do certificado"
-  end
-
-  local days_left = days_between(current_time, expiration_time)
-  local result = {}
-  
-  -- Certificate details
-  table.insert(result, "Detalhes do Certificado:")
-  if cert.subject then
-    table.insert(result, "  Subject: " .. (cert.subject.commonName or "N/A"))
-  end
-  if cert.issuer then
-    table.insert(result, "  Issuer: " .. (cert.issuer.commonName or "N/A"))
-  end
-  table.insert(result, "  Válido até: " .. cert.validity.notAfter)
-  
-  -- Status based on days left
-  if days_left < 0 then
-    table.insert(result, "❌ CRÍTICO: Certificado expirado há " .. math.abs(days_left) .. " dias!")
-  elseif days_left == 0 then
-    table.insert(result, "❌ CRÍTICO: Certificado expira hoje!")
-  elseif days_left <= 7 then
-    table.insert(result, "🔴 URGENTE: Certificado expira em " .. days_left .. " dias!")
-  elseif days_left <= 30 then
-    table.insert(result, "⚠️ ATENÇÃO: Certificado expira em " .. days_left .. " dias")
-  else
-    table.insert(result, "✅ OK: Certificado válido por " .. days_left .. " dias")
-  end
-  
-  return table.concat(result, "\\n")
-end`;
-
-    res.send(nseScript);
-  });
-
-  const httpServer = createServer(app);
-  return httpServer;
-}
-
-async function performCertificateCheck(hostname: string, port: number) {
-  return new Promise<any>((resolve, reject) => {
-    const options = {
-      hostname,
-      port,
-      method: 'HEAD',
-      rejectUnauthorized: false, // Allow self-signed certificates
-      timeout: 10000
-    };
-
-    const req = https.request(options, (res) => {
-      const cert = (res.socket as any).getPeerCertificate();
-      
-      if (!cert || Object.keys(cert).length === 0) {
-        resolve({
-          hostname,
-          port,
-          status: 'error',
-          errorMessage: 'Certificate not found or invalid',
-          daysUntilExpiration: null,
-          issuer: null,
-          subject: null,
-          validFrom: null,
-          validUntil: null
-        });
+      const id = idSchema.parse(req.params.id);
+      if (!(await storage.deleteScheduledScan(id))) {
+        res.status(404).json({ error: "Scheduled scan not found" });
         return;
       }
-
-      const now = new Date();
-      const validUntil = new Date(cert.valid_to);
-      const validFrom = new Date(cert.valid_from);
-      const msPerDay = 24 * 60 * 60 * 1000;
-      const daysUntilExpiration = Math.floor((validUntil.getTime() - now.getTime()) / msPerDay);
-
-      let status: string;
-      if (daysUntilExpiration < 0) {
-        status = 'expired';
-      } else if (daysUntilExpiration <= 30) {
-        status = 'warning';
-      } else {
-        status = 'valid';
-      }
-
-      resolve({
-        hostname,
-        port,
-        status,
-        daysUntilExpiration,
-        issuer: cert.issuer?.CN || cert.issuer?.O || 'Unknown',
-        subject: cert.subject?.CN || cert.subject?.O || 'Unknown', 
-        validFrom,
-        validUntil,
-        errorMessage: null
-      });
-    });
-
-    req.on('error', (error) => {
-      resolve({
-        hostname,
-        port,
-        status: 'error',
-        errorMessage: error.message,
-        daysUntilExpiration: null,
-        issuer: null,
-        subject: null,
-        validFrom: null,
-        validUntil: null
-      });
-    });
-
-    req.on('timeout', () => {
-      req.destroy();
-      resolve({
-        hostname,
-        port,
-        status: 'error',
-        errorMessage: 'Connection timeout',
-        daysUntilExpiration: null,
-        issuer: null,
-        subject: null,
-        validFrom: null,
-        validUntil: null
-      });
-    });
-
-    req.end();
-  });
-}
-
-async function performCertificateCheckNmap(hostname: string, port: number) {
-  const scriptPath = path.resolve(__dirname, "../public/tls-expired-cert-checker.nse");
-  await preScan(hostname, port);
-  try {
-    const { stdout } = await exec(`nmap -p ${port} --script "${scriptPath}" ${hostname} -oN -`, { maxBuffer: 10 * 1024 * 1024 });
-
-    let status: string = "unknown";
-    let daysUntilExpiration: number | null = null;
-    let issuer: string | null = null;
-    let subject: string | null = null;
-    let validUntil: string | null = null;
-
-    for (const raw of stdout.split("\n")) {
-      const line = raw.trim();
-      if (line.startsWith("✅")) status = "valid";
-      if (line.includes("ATENÇÃO") || line.startsWith("⚠️")) status = "warning";
-      if (line.includes("CRÍTICO") || line.startsWith("❌")) status = "expired";
-
-      const m = line.match(/(-?\d+) dias/);
-      if (m) daysUntilExpiration = parseInt(m[1], 10);
-
-      if (line.startsWith("Issuer:")) {
-        issuer = line.replace(/^Issuer:\s*/i, "").trim();
-      }
-      if (line.startsWith("Subject:")) {
-        subject = line.replace(/^Subject:\s*/i, "").trim();
-      }
-      if (line.startsWith("Válido até:")) {
-        validUntil = line.replace(/^Válido até:\s*/i, "").trim();
-      }
+      res.status(204).send();
+    } catch (error) {
+      handleRouteError(res, error, "Failed to delete scheduled scan");
     }
+  });
 
-    return { status, daysUntilExpiration, issuer, subject, validUntil };
-  } catch (error: any) {
-    return {
-      status: "error",
-      daysUntilExpiration: null,
-      issuer: null,
-      subject: null,
-      validUntil: null,
-      errorMessage: error.message,
-    };
-  }
+  app.get("/api/export/csv", async (_req, res) => {
+    try {
+      const csv = generateCSV(await storage.getCertificateChecks());
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", 'attachment; filename="certificate-checks.csv"');
+      res.send(csv);
+    } catch (error) {
+      handleRouteError(res, error, "Failed to export CSV");
+    }
+  });
+
+  app.get("/api/export/json", async (_req, res) => {
+    try {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader("Content-Disposition", 'attachment; filename="certificate-checks.json"');
+      res.json(await storage.getCertificateChecks());
+    } catch (error) {
+      handleRouteError(res, error, "Failed to export JSON");
+    }
+  });
+
+  app.get("/check-cert", scanLimiter, async (req, res) => {
+    try {
+      const { hostname, port } = scanTargetSchema.parse({
+        hostname: req.query.target,
+        port: req.query.port,
+      });
+      res.json(await performCertificateCheckNmap(hostname, port));
+    } catch (error) {
+      handleRouteError(res, error, "Failed to check certificate");
+    }
+  });
+
+  app.get("/api/v1/check/:hostname", scanLimiter, async (req, res) => {
+    try {
+      const { port, engine } = checkQuerySchema.parse(req.query);
+      const { hostname } = scanTargetSchema.pick({ hostname: true }).parse(req.params);
+      const result = engine === "nmap"
+        ? await performCertificateCheckNmap(hostname, port)
+        : await performCertificateCheck(hostname, port);
+
+      res.json({ ...result, engine, timestamp: new Date().toISOString() });
+    } catch (error) {
+      handleRouteError(res, error, "Failed to check certificate");
+    }
+  });
+
+  app.get("/api/download-script", (_req, res) => {
+    res.download(getNseScriptPath(), "tls-expired-cert-checker.nse", (error) => {
+      if (error && !res.headersSent) {
+        handleRouteError(res, error, "NSE script is unavailable");
+      }
+    });
+  });
+
+  return createServer(app);
 }
 
-// === Pré-validações =============================================
-async function dominioExiste(hostname: string): Promise<boolean> {
-  try {
-    const { address } = await dns.lookup(hostname);
-    console.log(`DNS OK: ${hostname} → ${address}`);
-    return true;
-  } catch (err: any) {
-    console.warn(`DNS falhou para ${hostname}:`, err.code || err.message);
-    return false;
-  }
-}
-
-async function estaNoAr(host: string): Promise<boolean> {
-  try {
-    const res = await ping.promise.probe(host, { timeout: 3 });
-    return res.alive;
-  } catch {
-    return false;
-  }
-}
-
-async function httpDisponivel(host: string, port = 443): Promise<boolean> {
-  try {
-    const url = `https://${host}:${port}`;
-    // Node 20+ tem fetch global, senão usar undici
-    const ctrl = new AbortController();
-    const id = setTimeout(() => ctrl.abort(), 5000);
-    const resp = await fetch(url, { method: "HEAD", signal: ctrl.signal });
-    clearTimeout(id);
-    return resp.ok;
-  } catch {
-    return false;
-  }
-}
-
-async function preScan(hostname: string, port: number) {
-  if (!(await dominioExiste(hostname))) {
-    throw new Error("Domínio não existe ou não resolve");
-  }
-  if (!(await estaNoAr(hostname))) {
-    throw new Error("Host não responde a ping");
-  }
-  if (!(await httpDisponivel(hostname, port))) {
-    throw new Error(`Nenhuma resposta HTTPS em ${hostname}:${port}`);
-  }
-}
-
-// Helper functions
-async function processBatchScan(batchId: string, hosts: Array<{hostname: string, port: number}>) {
-  await storage.updateBatchScan(batchId, { status: 'running' });
-  
+async function processBatchScan(
+  batchId: string,
+  hosts: Array<{ hostname: string; port: number }>,
+): Promise<void> {
+  await storage.updateBatchScan(batchId, { status: "running" });
   let completed = 0;
   let failed = 0;
-  
-  const results = [];
-  
+  const results: InsertCertificateCheck[] = [];
+
   for (const host of hosts) {
+    let result: InsertCertificateCheck;
     try {
-      const result = await performCertificateCheck(host.hostname, host.port);
-      
-      // Store individual check result
-      await storage.createCertificateCheck({
-        ...result,
-        batchId
-      });
-      
-      results.push(result);
-      completed++;
+      result = await performCertificateCheck(host.hostname, host.port);
     } catch (error) {
-      failed++;
-      results.push({
+      result = {
         hostname: host.hostname,
         port: host.port,
-        status: 'error',
-        errorMessage: 'Failed to scan host',
+        status: "error",
+        errorMessage: error instanceof TargetValidationError
+          ? error.message
+          : "Failed to scan host",
         daysUntilExpiration: null,
         issuer: null,
         subject: null,
         validFrom: null,
-        validUntil: null
-      });
+        validUntil: null,
+        batchId,
+      };
     }
-    
-    // Update progress
+
+    result = { ...result, batchId };
+    await storage.createCertificateCheck(result);
+    results.push(result);
+
+    if (result.status === "error") failed += 1;
+    else completed += 1;
+
     await storage.updateBatchScan(batchId, {
       completedHosts: completed,
-      failedHosts: failed
+      failedHosts: failed,
     });
   }
-  
-  // Mark as completed
+
   await storage.updateBatchScan(batchId, {
-    status: 'completed',
+    status: "completed",
     completedAt: new Date(),
-    results: results
+    results,
   });
 }
 
-function calculateNextScanTime(scheduleType: string): Date {
-  const now = new Date();
-  const next = new Date(now);
-  
-  switch (scheduleType) {
-    case 'daily':
-      next.setDate(next.getDate() + 1);
-      break;
-    case 'weekly':
-      next.setDate(next.getDate() + 7);
-      break;
-    case 'monthly':
-      next.setMonth(next.getMonth() + 1);
-      break;
-    default:
-      next.setDate(next.getDate() + 1);
-  }
-  
+function calculateNextScanTime(scheduleType: "daily" | "weekly" | "monthly"): Date {
+  const next = new Date();
+  if (scheduleType === "daily") next.setDate(next.getDate() + 1);
+  if (scheduleType === "weekly") next.setDate(next.getDate() + 7);
+  if (scheduleType === "monthly") next.setMonth(next.getMonth() + 1);
   return next;
 }
 
-function generateCSV(checks: any[]): string {
+function escapeCsvField(value: unknown): string {
+  let text = value === null || value === undefined ? "" : String(value);
+  if (/^[=+\-@]/.test(text)) text = `'${text}`;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+export function generateCSV(checks: CertificateCheck[]): string {
   const headers = [
-    'hostname', 'port', 'status', 'daysUntilExpiration', 
-    'issuer', 'subject', 'validFrom', 'validUntil', 
-    'errorMessage', 'scanTimestamp'
+    "hostname",
+    "port",
+    "status",
+    "daysUntilExpiration",
+    "issuer",
+    "subject",
+    "validFrom",
+    "validUntil",
+    "errorMessage",
+    "scanTimestamp",
   ];
-  
-  const rows = checks.map(check => [
+
+  const rows = checks.map((check) => [
     check.hostname,
     check.port,
     check.status,
-    check.daysUntilExpiration || '',
-    check.issuer || '',
-    check.subject || '',
-    check.validFrom || '',
-    check.validUntil || '',
-    check.errorMessage || '',
-    check.scanTimestamp || ''
+    check.daysUntilExpiration,
+    check.issuer,
+    check.subject,
+    check.validFrom?.toISOString(),
+    check.validUntil?.toISOString(),
+    check.errorMessage,
+    check.scanTimestamp?.toISOString(),
   ]);
-  
-  const csvContent = [
-    headers.join(','),
-    ...rows.map(row => row.map(field => `"${String(field).replace(/"/g, '""')}"`).join(','))
-  ].join('\n');
-  
-  return csvContent;
+
+  return [headers.map(escapeCsvField).join(","), ...rows.map((row) => row.map(escapeCsvField).join(","))]
+    .join("\n");
 }

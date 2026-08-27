@@ -16,7 +16,7 @@ export default function CertificateTester() {
   const [customPort, setCustomPort] = useState("443");
   const { toast } = useToast();
 
-  const { data: recentChecks, isLoading: isLoadingChecks } = useQuery<CertificateCheck[]>({
+  const { data: recentChecks } = useQuery<CertificateCheck[]>({
     queryKey: ["/api/certificate-checks"],
   });
 
@@ -50,10 +50,10 @@ export default function CertificateTester() {
         variant,
       });
     },
-    onError: () => {
+    onError: (error) => {
       toast({
         title: "Error",
-        description: "Failed to check certificate",
+        description: error instanceof Error ? error.message : "Failed to check certificate",
         variant: "destructive",
       });
     },
@@ -70,6 +70,14 @@ export default function CertificateTester() {
     }
 
     const port = useCustomPort ? parseInt(customPort) : 443;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      toast({
+        title: "Error",
+        description: "Port must be between 1 and 65535",
+        variant: "destructive",
+      });
+      return;
+    }
     checkCertificateMutation.mutate({ hostname: hostname.trim(), port });
   };
 
@@ -105,15 +113,6 @@ export default function CertificateTester() {
     return lines;
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "valid": return "text-emerald-300";
-      case "warning": return "text-amber-300";
-      case "expired": return "text-red-300";
-      default: return "text-slate-400";
-    }
-  };
-
   const latestCheck = recentChecks?.[0];
 
   return (
@@ -131,7 +130,7 @@ export default function CertificateTester() {
             <div className="flex space-x-3">
               <Input
                 type="text"
-                placeholder="example.com or 192.168.1.1"
+                placeholder="example.com or a public IP address"
                 value={hostname}
                 onChange={(e) => setHostname(e.target.value)}
                 className="flex-1 bg-slate-700 border-slate-600 text-slate-50 placeholder-slate-400 focus:border-blue-400 focus:ring-blue-400"
