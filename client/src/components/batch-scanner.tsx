@@ -57,9 +57,62 @@ export default function BatchScanner() {
     // Parse hosts from text input
     const lines = hostsText.split('\n').filter(line => line.trim());
     const hosts = lines.map(line => {
-      const [hostname, portStr] = line.trim().split(':');
-      const port = portStr ? parseInt(portStr) : 443;
-      return { hostname: hostname.trim(), port };
+      let raw = line.trim();
+      let parsedHostname = raw;
+      let parsedPort = 443;
+
+      // If it looks like a URL, extract hostname and port using URL API
+      if (raw.startsWith("http://") || raw.startsWith("https://")) {
+        try {
+          const url = new URL(raw);
+          parsedHostname = url.hostname;
+          if (url.port) {
+            parsedPort = parseInt(url.port, 10);
+          }
+        } catch (e) {
+          // Fallback if URL parsing fails
+          const withoutProtocol = raw.replace(/^https?:\/\//i, "");
+          const [hostPart] = withoutProtocol.split('/');
+          const parts = hostPart.split(':');
+          parsedHostname = parts[0];
+          if (parts[1]) parsedPort = parseInt(parts[1], 10);
+        }
+      } else {
+        // Standard hostname or IP, possibly with port (e.g., example.com:8443)
+        // Note: IPv6 addresses contain colons, but URL parsing is needed for them if they have ports.
+        // For simplicity, we assume standard format or IPv4 with port.
+        const lastColonIdx = raw.lastIndexOf(':');
+        // Check if it's an IPv6 address without port (has multiple colons, no brackets)
+        const isIpv6WithoutPort = raw.split(':').length > 2 && !raw.includes(']');
+        
+        if (lastColonIdx !== -1 && !isIpv6WithoutPort) {
+          // Check if it's an IPv6 with port like [::1]:8443
+          if (raw.includes(']')) {
+             const bracketEnd = raw.indexOf(']');
+             if (lastColonIdx > bracketEnd) {
+               parsedHostname = raw.slice(0, bracketEnd + 1);
+               parsedPort = parseInt(raw.slice(lastColonIdx + 1), 10);
+             } else {
+               parsedHostname = raw;
+             }
+          } else {
+            parsedHostname = raw.slice(0, lastColonIdx);
+            parsedPort = parseInt(raw.slice(lastColonIdx + 1), 10);
+          }
+        } else {
+          parsedHostname = raw;
+        }
+      }
+
+      // Cleanup paths if they still exist (e.g., example.com/path)
+      if (parsedHostname.includes('/')) {
+        parsedHostname = parsedHostname.split('/')[0];
+      }
+
+      return { 
+        hostname: parsedHostname.trim(), 
+        port: Number.isNaN(parsedPort) ? 443 : parsedPort 
+      };
     }).filter(host => host.hostname);
 
     if (hosts.length === 0) {
