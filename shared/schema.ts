@@ -6,7 +6,20 @@ export const hostnameSchema = z
   .string()
   .trim()
   .min(1)
-  .max(253)
+  .max(2048)
+  .transform((value) => {
+    if (value.startsWith("http://") || value.startsWith("https://")) {
+      try {
+        return new URL(value).hostname;
+      } catch {
+        return value.replace(/^https?:\/\//i, "").split("/")[0];
+      }
+    }
+    if (value.includes("/")) {
+      return value.split("/")[0];
+    }
+    return value;
+  })
   .transform((value) => value.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase())
   .refine((value) => /^[a-z0-9.:-]+$/.test(value), "Invalid hostname or IP address");
 
